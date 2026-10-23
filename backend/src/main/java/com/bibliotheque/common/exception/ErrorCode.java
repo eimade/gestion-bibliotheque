@@ -1,0 +1,97 @@
+package com.bibliotheque.common.exception;
+
+import org.springframework.http.HttpStatus;
+
+/**
+ * Catalogue des codes d'erreur métier stables (ARCH-socle §4, openapi.yaml ErrorCode).
+ * Chaque code porte le statut HTTP par défaut ; {@link BusinessException} peut le surcharger.
+ */
+public enum ErrorCode {
+
+    // Transverses
+    VALIDATION_FAILED(HttpStatus.BAD_REQUEST),
+    AUTHENTICATION_REQUIRED(HttpStatus.UNAUTHORIZED),
+    ACCESS_DENIED(HttpStatus.FORBIDDEN),
+    CSRF_TOKEN_INVALID(HttpStatus.FORBIDDEN),
+    CONCURRENT_MODIFICATION(HttpStatus.CONFLICT),
+    ROUTE_NOT_FOUND(HttpStatus.NOT_FOUND),
+    REQUEST_NOT_SUPPORTED(HttpStatus.METHOD_NOT_ALLOWED),
+    INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR),
+
+    // Ressources introuvables
+    ACCOUNT_NOT_FOUND(HttpStatus.NOT_FOUND),
+    MEMBER_NOT_FOUND(HttpStatus.NOT_FOUND),
+    BOOK_NOT_FOUND(HttpStatus.NOT_FOUND),
+    AUTHOR_NOT_FOUND(HttpStatus.NOT_FOUND),
+    CATEGORY_NOT_FOUND(HttpStatus.NOT_FOUND),
+    COPY_NOT_FOUND(HttpStatus.NOT_FOUND),
+    LOAN_NOT_FOUND(HttpStatus.NOT_FOUND),
+    RESERVATION_NOT_FOUND(HttpStatus.NOT_FOUND),
+    FINE_NOT_FOUND(HttpStatus.NOT_FOUND),
+
+    // Authentification et comptes (RG-01 à RG-06, RG-14)
+    INVALID_CREDENTIALS(HttpStatus.UNAUTHORIZED),
+    ACCOUNT_LOCKED(HttpStatus.UNAUTHORIZED),
+    ACCOUNT_DISABLED(HttpStatus.UNAUTHORIZED),
+    PASSWORD_POLICY_VIOLATION(HttpStatus.UNPROCESSABLE_ENTITY),
+    PASSWORD_RECENTLY_USED(HttpStatus.UNPROCESSABLE_ENTITY),
+    CURRENT_PASSWORD_INCORRECT(HttpStatus.UNPROCESSABLE_ENTITY),
+    PASSWORD_CHANGE_REQUIRED(HttpStatus.FORBIDDEN),
+    ROLE_NOT_ALLOWED(HttpStatus.UNPROCESSABLE_ENTITY),
+    SELF_DEACTIVATION_FORBIDDEN(HttpStatus.CONFLICT),
+    LAST_ADMIN_REQUIRED(HttpStatus.CONFLICT),
+    EMAIL_ALREADY_USED(HttpStatus.CONFLICT),
+
+    // Catalogue (RG-07 à RG-12)
+    ISBN_INVALID(HttpStatus.UNPROCESSABLE_ENTITY),
+    ISBN_ALREADY_EXISTS(HttpStatus.CONFLICT),
+    ISBN_LOOKUP_NOT_FOUND(HttpStatus.NOT_FOUND),
+    ISBN_LOOKUP_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE),
+    BOOK_HAS_COPIES(HttpStatus.CONFLICT),
+    COPY_IN_CIRCULATION(HttpStatus.CONFLICT),
+    COPY_WITHDRAWN(HttpStatus.CONFLICT),
+    CATEGORY_ALREADY_EXISTS(HttpStatus.CONFLICT),
+    CATEGORY_IN_USE(HttpStatus.CONFLICT),
+
+    // Adhérents (RG-13 à RG-20)
+    DUPLICATE_MEMBER_SUSPECTED(HttpStatus.CONFLICT),
+    GUARDIAN_REQUIRED(HttpStatus.UNPROCESSABLE_ENTITY),
+    RENEWAL_TOO_EARLY(HttpStatus.CONFLICT),
+    MEMBER_SUSPENDED(HttpStatus.CONFLICT),
+    MEMBER_ARCHIVED(HttpStatus.CONFLICT),
+    ARCHIVE_BLOCKED(HttpStatus.CONFLICT),
+
+    // Circulation (RG-21 à RG-39)
+    MEMBER_NOT_ELIGIBLE(HttpStatus.CONFLICT),
+    COPY_NOT_AVAILABLE(HttpStatus.CONFLICT),
+    COPY_RESERVED_FOR_ANOTHER_MEMBER(HttpStatus.CONFLICT),
+    NO_ACTIVE_LOAN_FOR_COPY(HttpStatus.CONFLICT),
+    RENEWAL_LIMIT_REACHED(HttpStatus.CONFLICT),
+    RENEWAL_BLOCKED_BY_RESERVATION(HttpStatus.CONFLICT),
+    LOAN_OVERDUE(HttpStatus.CONFLICT),
+    LOAN_NOT_ACTIVE(HttpStatus.CONFLICT),
+    COPY_NOT_LOST(HttpStatus.CONFLICT),
+    COPY_AVAILABLE_ON_SHELF(HttpStatus.CONFLICT),
+    NO_COPY_IN_CIRCULATION(HttpStatus.CONFLICT),
+    RESERVATION_LIMIT_REACHED(HttpStatus.CONFLICT),
+    RESERVATION_ALREADY_EXISTS(HttpStatus.CONFLICT),
+    BOOK_ALREADY_BORROWED(HttpStatus.CONFLICT),
+    RESERVATION_CLOSED(HttpStatus.CONFLICT),
+    PARTIAL_PAYMENT_NOT_ALLOWED(HttpStatus.UNPROCESSABLE_ENTITY),
+    PAYMENT_AMOUNT_MISMATCH(HttpStatus.UNPROCESSABLE_ENTITY),
+    FINE_ALREADY_SETTLED(HttpStatus.CONFLICT),
+
+    // Pilotage (RG-40, RG-41)
+    SETTING_OUT_OF_RANGE(HttpStatus.UNPROCESSABLE_ENTITY),
+    MONTH_IN_FUTURE(HttpStatus.UNPROCESSABLE_ENTITY);
+
+    private final HttpStatus defaultStatus;
+
+    ErrorCode(HttpStatus defaultStatus) {
+        this.defaultStatus = defaultStatus;
+    }
+
+    public HttpStatus defaultStatus() {
+        return defaultStatus;
+    }
+}

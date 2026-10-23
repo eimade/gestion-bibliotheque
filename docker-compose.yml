@@ -1,0 +1,126 @@
+# Déploiement de l'application de gestion de bibliothèque (ADR-005, ARCH-socle §7.3).
+# Usage : copier .env.example en .env, renseigner les secrets, puis `docker compose up -d --build`.
+# Seul le frontend est exposé ; il relaie /api vers le backend. La base n'est joignable que du backend.
+name: bibliotheque
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD:?Définir MARIADB_ROOT_PASSWORD dans .env}
+      MARIADB_DATABASE: ${DB_NAME:-bibliotheque}
+      # Utilisateur de migration (propriétaire du schéma, utilisé par Flyway)
+      MARIADB_USER: ${DB_MIGRATION_USER:?Définir DB_MIGRATION_USER dans .env}
+      MARIADB_PASSWORD: ${DB_MIGRATION_PASSWORD:?Définir DB_MIGRATION_PASSWORD dans .env}
+      # Utilisateur applicatif (DML uniquement), créé par db/init/01-create-app-user.sh
+      DB_APP_USER: ${DB_APP_USER:?Définir DB_APP_USER dans .env}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD:?Définir DB_APP_PASSWORD dans .env}
+      TZ: UTC
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-time-zone=+00:00
+      - --skip-name-resolve
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    networks:
+      - backend-net
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging: *default-logging
+
+  backend:
+    build:
+      context: ./backend
+    image: bibliotheque-backend:${APP_VERSION:-0.1.0}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME:-bibliotheque}
+      DB_APP_USER: ${DB_APP_USER}
+      DB_APP_PASSWORD: ${DB_APP_PASSWORD}
+      DB_MIGRATION_USER: ${DB_MIGRATION_USER}
+      DB_MIGRATION_PASSWORD: ${DB_MIGRATION_PASSWORD}
+      APP_BOOTSTRAP_ADMIN_EMAIL: ${APP_BOOTSTRAP_ADMIN_EMAIL:?Définir APP_BOOTSTRAP_ADMIN_EMAIL dans .env}
+      APP_BOOTSTRAP_ADMIN_PASSWORD: ${APP_BOOTSTRAP_ADMIN_PASSWORD:?Définir APP_BOOTSTRAP_ADMIN_PASSWORD dans .env}
+      TZ: UTC
+    # Pas de port publié : le backend n'est joignable qu'à travers le frontend
+    networks:
+      - backend-net
+      - frontend-net     # réseau non interne : accès sortant (US-015 pré-remplissage ISBN, US-036 e-mails)
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging: *default-logging
+
+  frontend:
+    build:
+      context: ./frontend
+    image: bibliotheque-frontend:${APP_VERSION:-0.1.0}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    networks:
+      - frontend-net
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    logging: *default-logging
+
+  # Sauvegarde logique quotidienne (NFR-12 : perte maximale 24 h). Copier /backups hors de l'hôte.
+  db-backup:
+    image: mariadb:11.4
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    entrypoint: ["bash", "/usr/local/bin/backup.sh"]
+    environment:
+      DB_HOST: db
+      DB_NAME: ${DB_NAME:-bibliotheque}
+      DB_BACKUP_USER: ${DB_MIGRATION_USER}
+      MYSQL_PWD: ${DB_MIGRATION_PASSWORD}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      TZ: UTC
+    volumes:
+      - ./db/backup/backup.sh:/usr/local/bin/backup.sh:ro
+      - db-backups:/backups
+    networks:
+      - backend-net
+    logging: *default-logging
+
+volumes:
+  db-data:
+  db-backups:
+
+networks:
+  backend-net:
+    internal: true       # aucun accès extérieur : la base est isolée
+  frontend-net:

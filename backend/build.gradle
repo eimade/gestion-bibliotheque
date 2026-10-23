@@ -1,0 +1,107 @@
+plugins {
+    id 'java'
+    id 'jacoco'
+    alias(libs.plugins.spring.boot)
+    alias(libs.plugins.spring.dependency.management)
+}
+
+group = 'com.bibliotheque'
+version = '0.1.0'
+description = 'Application de gestion de bibliothèque — backend'
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    // Web, validation, persistance, sécurité (ADR-001, ADR-003, ADR-004)
+    implementation 'org.springframework.boot:spring-boot-starter-web'
+    implementation 'org.springframework.boot:spring-boot-starter-validation'
+    implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+    implementation 'org.springframework.boot:spring-boot-starter-security'
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
+    implementation 'org.springframework.session:spring-session-jdbc'
+
+    // Schéma de base géré exclusivement par Flyway (ADR-002) ; flyway-mysql couvre MariaDB
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-mysql'
+    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
+
+    // Documentation OpenAPI, désactivée par défaut et activée uniquement en profil dev (ADR-003)
+    implementation libs.springdoc.openapi.webmvc.ui
+
+    // Tests (ADR-005) : JUnit 5, AssertJ, Mockito via starter-test ; Testcontainers MariaDB, jamais H2
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation 'org.springframework.security:spring-security-test'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:mariadb'
+    testImplementation libs.archunit.junit5
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    // -parameters : noms de paramètres disponibles pour Spring (liaison de requêtes, validation)
+    options.compilerArgs += ['-parameters', '-Xlint:all,-processing,-serial']
+}
+
+springBoot {
+    // Alimente /actuator/info (version, date de build)
+    buildInfo()
+}
+
+bootJar {
+    archiveFileName = 'bibliotheque-backend.jar'
+}
+
+// Le jar « plain » n'est pas utilisé : seul le jar exécutable est livré
+jar {
+    enabled = false
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+    // Les tests unitaires et les tests d'intégration *IT (Testcontainers) s'exécutent ensemble
+    systemProperty 'user.timezone', 'UTC'
+    jvmArgs '-XX:+EnableDynamicAgentLoading'
+    finalizedBy tasks.named('jacocoTestReport')
+}
+
+jacoco {
+    toolVersion = libs.versions.jacoco.get()
+}
+
+tasks.named('jacocoTestReport') {
+    dependsOn tasks.named('test')
+    reports {
+        xml.required = true
+        html.required = true
+    }
+}
+
+// Couverture minimale des services métier (QA : ≥ 80 % des lignes des packages *.service)
+tasks.named('jacocoTestCoverageVerification') {
+    dependsOn tasks.named('test')
+    violationRules {
+        rule {
+            element = 'PACKAGE'
+            includes = ['com.bibliotheque.*.service']
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('jacocoTestCoverageVerification')
+}

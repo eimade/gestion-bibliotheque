@@ -1,0 +1,21 @@
+# Surcharge de développement local :
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+# puis lancer le backend depuis l'IDE (profil dev, port 8081) et le frontend avec `ng serve`.
+# Les ports ne sont publiés que sur 127.0.0.1.
+services:
+  db:
+    ports:
+      - "127.0.0.1:3306:3306"
+    networks:
+      - backend-net
+      - dev-net          # un service uniquement sur un réseau interne ne peut pas publier de port
+
+  backend:
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SERVER_PORT: "8080"
+    ports:
+      - "127.0.0.1:8081:8080"
+
+networks:
+  dev-net:

@@ -1,0 +1,15 @@
+# Profil de production (conteneur). Le cookie de session est toujours Secure : le service doit être
+# servi en HTTPS (terminaison TLS en amont du conteneur frontend, Q-28).
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true
+
+spring:
+  jpa:
+    show-sql: false
+
+logging:
+  level:
+    com.bibliotheque: INFO

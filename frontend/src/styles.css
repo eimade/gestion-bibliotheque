@@ -1,0 +1,56 @@
+@import '@fontsource-variable/inter/wght.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply font-sans text-base text-ink antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+  }
+
+  body {
+    @apply min-h-screen bg-surface-alt;
+  }
+
+  h1, h2, h3 {
+    @apply tracking-tight;
+  }
+
+  /* Anneau de focus visible sur tous les éléments interactifs (WCAG 2.4.7) */
+  :focus-visible {
+    @apply outline-none ring-2 ring-focus ring-offset-2;
+  }
+}
+
+@layer components {
+  .field-input {
+    @apply block w-full rounded-lg border border-border bg-surface px-3.5 py-2.5 text-ink shadow-sm transition
+      placeholder:text-muted hover:border-slate-300 focus:border-primary focus:ring-4 focus:ring-primary/15
+      focus:outline-none disabled:cursor-not-allowed disabled:bg-surface-alt aria-[invalid=true]:border-danger
+      motion-reduce:transition-none;
+  }
+
+  /* Carte de contenu : fond blanc, coins arrondis, ombre douce */
+  .card {
+    @apply rounded-2xl border border-border/70 bg-surface shadow-card;
+  }
+
+  /* Fond de bandeau inspiré des maquettes : lavande → ciel */
+  .hero-gradient {
+    background-image: linear-gradient(135deg, theme('colors.violet.200') 0%, theme('colors.indigo.100') 45%, theme('colors.sky.200') 100%);
+  }
+
+  .brand-gradient {
+    background-image: linear-gradient(135deg, theme('colors.indigo.700') 0%, theme('colors.violet.700') 55%, theme('colors.teal.700') 100%);
+  }
+}
+
+@layer utilities {
+  /* Barre de défilement discrète du menu latéral sombre */
+  .sidebar-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.15) transparent;
+  }
+}

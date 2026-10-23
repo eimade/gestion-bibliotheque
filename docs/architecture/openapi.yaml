@@ -1,0 +1,2662 @@
+openapi: 3.1.0
+info:
+  title: API Bibliothèque
+  version: 0.1.0
+  description: |
+    Contrat de l'API de l'application de gestion de bibliothèque (ADR-003).
+    Ce fichier est la source de vérité. Il contient pour l'instant le socle commun
+    (sécurité, erreurs, pagination) ; les chemins sont ajoutés feature par feature
+    par les documents ARCH-<slug>.md.
+servers:
+  - url: /api/v1
+    description: Même origine que le frontend (nginx relaie /api vers le backend)
+
+security:
+  - sessionCookie: []
+
+tags:
+  - name: authentification
+  - name: catalogue
+  - name: adherents
+  - name: circulation
+  - name: pilotage
+
+paths:
+  /auth/login:
+    post:
+      tags: [authentification]
+      summary: Ouvrir une session (US-001)
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Session ouverte ; cookie BIBSESSION posé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionUserResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401':
+          description: INVALID_CREDENTIALS, ACCOUNT_LOCKED (propriété lockedUntil) ou ACCOUNT_DISABLED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /auth/logout:
+    post:
+      tags: [authentification]
+      summary: Fermer la session (US-002)
+      operationId: logout
+      responses:
+        '204': { description: Session invalidée }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/me:
+    get:
+      tags: [authentification]
+      summary: Lire la session courante
+      operationId: currentSession
+      responses:
+        '200':
+          description: Utilisateur connecté
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SessionUserResponse' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+
+  /auth/password:
+    post:
+      tags: [authentification]
+      summary: Changer son mot de passe (US-003, RG-01, RG-05)
+      operationId: changePassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        '204': { description: Mot de passe changé ; il n'est plus temporaire }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '422':
+          description: CURRENT_PASSWORD_INCORRECT, PASSWORD_POLICY_VIOLATION ou PASSWORD_RECENTLY_USED
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+
+  /staff-accounts:
+    get:
+      tags: [authentification]
+      summary: Lister les comptes du personnel (US-004, US-005) — ADMIN
+      operationId: listStaffAccounts
+      parameters:
+        - name: q
+          in: query
+          description: Nom, prénom ou e-mail (au moins 2 caractères)
+          schema: { type: string, minLength: 2, maxLength: 100 }
+        - name: role
+          in: query
+          schema: { type: string, enum: [LIBRARIAN, ADMIN] }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/AccountStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: sort
+          in: query
+          description: "lastName (défaut), role ou status, suivi de ,asc ou ,desc"
+          schema: { type: string, pattern: '^(lastName|role|status),(asc|desc)$', default: 'lastName,asc' }
+      responses:
+        '200':
+          description: Page de comptes
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffAccountPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [authentification]
+      summary: Créer un compte du personnel (US-004) — ADMIN
+      operationId: createStaffAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateStaffAccountRequest' }
+      responses:
+        '201':
+          description: Compte créé au statut ACTIVE avec mot de passe temporaire
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffAccountResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /staff-accounts/{id}:
+    get:
+      tags: [authentification]
+      summary: Lire un compte du personnel (cible de Location) — ADMIN
+      operationId: getStaffAccount
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Compte du personnel
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffAccountResponse' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /staff-accounts/{id}/deactivation:
+    post:
+      tags: [authentification]
+      summary: Désactiver un compte du personnel (US-005, RG-06) — ADMIN
+      operationId: deactivateStaffAccount
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Compte désactivé ; ses sessions sont supprimées
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffAccountResponse' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /staff-accounts/{id}/reactivation:
+    post:
+      tags: [authentification]
+      summary: Réactiver un compte du personnel (US-005) — ADMIN
+      operationId: reactivateStaffAccount
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      responses:
+        '200':
+          description: Compte réactivé, compteur d'échecs remis à 0
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StaffAccountResponse' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /accounts/{id}/password-reset:
+    post:
+      tags: [authentification]
+      summary: Attribuer un mot de passe temporaire (US-006) — LIBRARIAN (comptes MEMBER), ADMIN
+      operationId: resetAccountPassword
+      parameters:
+        - $ref: '#/components/parameters/AccountId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordResetRequest' }
+      responses:
+        '204': { description: "Mot de passe temporaire attribué, compte débloqué, sessions supprimées" }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /catalog/books:
+    get:
+      tags: [catalogue]
+      summary: Rechercher dans le catalogue public (US-007, RG-11)
+      operationId: searchCatalog
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/CategoryFilter'
+        - name: language
+          in: query
+          schema: { type: string, pattern: '^[a-z]{3}$' }
+        - name: available
+          in: query
+          description: Seulement les notices ayant au moins un exemplaire disponible
+          schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: sort
+          in: query
+          description: "Absent = pertinence (si q) ou titre"
+          schema: { type: string, enum: ['title,asc', 'publicationYear,desc'] }
+      responses:
+        '200':
+          description: Notices visibles du public
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookSearchPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+
+  /catalog/books/{id}:
+    get:
+      tags: [catalogue]
+      summary: Fiche publique d'une notice (US-008)
+      operationId: getPublicBook
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/BookId'
+      responses:
+        '200':
+          description: Notice et exemplaires hors WITHDRAWN, sans donnée d'emprunteur
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookPublicDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /catalog/categories:
+    get:
+      tags: [catalogue]
+      summary: Liste des catégories (filtres et saisie)
+      operationId: listCategoryOptions
+      security: []
+      responses:
+        '200':
+          description: Toutes les catégories, triées par libellé
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CategoryOption' }
+
+  /catalog/languages:
+    get:
+      tags: [catalogue]
+      summary: Liste des langues
+      operationId: listLanguages
+      security: []
+      responses:
+        '200':
+          description: Langues dans l'ordre d'affichage
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/LanguageOption' }
+
+  /books:
+    get:
+      tags: [catalogue]
+      summary: Rechercher les notices (gestion, US-007 AC-007-7) — LIBRARIAN, ADMIN
+      operationId: searchBooks
+      parameters:
+        - $ref: '#/components/parameters/Query'
+        - $ref: '#/components/parameters/CategoryFilter'
+        - name: includeWithdrawn
+          in: query
+          schema: { type: boolean, default: false }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: sort
+          in: query
+          schema: { type: string, pattern: '^(title|publicationYear),(asc|desc)$', default: 'title,asc' }
+      responses:
+        '200':
+          description: Page de notices
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookAdminPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '401': { $ref: '#/components/responses/Unauthenticated' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [catalogue]
+      summary: Créer une notice (US-009) — LIBRARIAN, ADMIN
+      operationId: createBook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookRequest' }
+      responses:
+        '201':
+          description: Notice créée (sans exemplaire)
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookAdminDetail' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /books/{id}:
+    get:
+      tags: [catalogue]
+      summary: Fiche de gestion d'une notice (US-008 AC-008-2) — LIBRARIAN, ADMIN
+      operationId: getBook
+      parameters:
+        - $ref: '#/components/parameters/BookId'
+      responses:
+        '200':
+          description: Notice et tous ses exemplaires
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookAdminDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [catalogue]
+      summary: Modifier une notice (US-010) — LIBRARIAN, ADMIN
+      operationId: updateBook
+      parameters:
+        - $ref: '#/components/parameters/BookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BookRequest' }
+      responses:
+        '200':
+          description: Notice modifiée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BookAdminDetail' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+    delete:
+      tags: [catalogue]
+      summary: Supprimer une notice sans exemplaire (US-011) — LIBRARIAN, ADMIN
+      operationId: deleteBook
+      parameters:
+        - $ref: '#/components/parameters/BookId'
+      responses:
+        '204': { description: Notice supprimée }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /books/{id}/copies:
+    post:
+      tags: [catalogue]
+      summary: Ajouter des exemplaires (US-012) — LIBRARIAN, ADMIN
+      operationId: addCopies
+      parameters:
+        - $ref: '#/components/parameters/BookId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddCopiesRequest' }
+      responses:
+        '201':
+          description: Exemplaires créés, numéros attribués (RG-09)
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/CopyResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /authors:
+    get:
+      tags: [catalogue]
+      summary: Suggérer des auteurs (US-009) — LIBRARIAN, ADMIN
+      operationId: suggestAuthors
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 100 }
+      responses:
+        '200':
+          description: 10 auteurs au plus, triés par nom
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuthorResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [catalogue]
+      summary: Créer un auteur (AC-009-2) — LIBRARIAN, ADMIN
+      operationId: createAuthor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AuthorRequest' }
+      responses:
+        '201':
+          description: Auteur créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthorResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /copies/{copyNumber}:
+    put:
+      tags: [catalogue]
+      summary: Modifier la cote et l'état d'un exemplaire (US-013) — LIBRARIAN, ADMIN
+      operationId: updateCopy
+      parameters:
+        - $ref: '#/components/parameters/CopyNumber'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateCopyRequest' }
+      responses:
+        '200':
+          description: Exemplaire modifié
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CopyResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /copies/{copyNumber}/withdrawal:
+    post:
+      tags: [catalogue]
+      summary: Retirer un exemplaire du fonds (US-013, RG-10) — LIBRARIAN, ADMIN
+      operationId: withdrawCopy
+      parameters:
+        - $ref: '#/components/parameters/CopyNumber'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WithdrawCopyRequest' }
+      responses:
+        '200':
+          description: Exemplaire retiré (définitif)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CopyResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /categories:
+    get:
+      tags: [catalogue]
+      summary: Lister les catégories avec leur nombre de notices (US-014) — LIBRARIAN, ADMIN
+      operationId: listCategories
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: sort
+          in: query
+          schema: { type: string, enum: ['label,asc', 'label,desc'], default: 'label,asc' }
+      responses:
+        '200':
+          description: Page de catégories
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoryPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [catalogue]
+      summary: Créer une catégorie (US-014) — LIBRARIAN, ADMIN
+      operationId: createCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryRequest' }
+      responses:
+        '201':
+          description: Catégorie créée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoryResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /categories/{id}:
+    put:
+      tags: [catalogue]
+      summary: Renommer une catégorie (US-014) — LIBRARIAN, ADMIN
+      operationId: renameCategory
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryRequest' }
+      responses:
+        '200':
+          description: Catégorie renommée
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CategoryResponse' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+    delete:
+      tags: [catalogue]
+      summary: Supprimer une catégorie inutilisée (US-014, RG-12) — LIBRARIAN, ADMIN
+      operationId: deleteCategory
+      parameters:
+        - $ref: '#/components/parameters/CategoryId'
+      responses:
+        '204': { description: Catégorie supprimée }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: CATEGORY_IN_USE (propriété bookCount)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+
+  /members:
+    get:
+      tags: [adherents]
+      summary: "Rechercher des adhérents (US-017) — LIBRARIAN, ADMIN"
+      operationId: searchMembers
+      parameters:
+        - name: q
+          in: query
+          description: "Numéro exact (A + 6 chiffres) ou nom, prénom, e-mail"
+          schema: { type: string, minLength: 2, maxLength: 100 }
+        - name: status
+          in: query
+          schema: { $ref: '#/components/schemas/MemberStatus' }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+        - name: sort
+          in: query
+          description: "Tri champ,asc|desc : lastName, memberNumber, expiryDate"
+          schema: { type: string }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberSummaryPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [adherents]
+      summary: "Inscrire un adhérent et créer son compte (US-016) — LIBRARIAN, ADMIN"
+      operationId: registerMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberCreateRequest' }
+      responses:
+        '201':
+          description: Créé
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberDetail' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /members/to-archive:
+    get:
+      tags: [adherents]
+      summary: "Adhérents expirés depuis plus de 3 ans (US-022, RG-19) — LIBRARIAN, ADMIN"
+      operationId: membersToArchive
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberToArchivePage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /members/{memberNumber}:
+    get:
+      tags: [adherents]
+      summary: "Fiche d'un adhérent avec éligibilité (US-018) — LIBRARIAN, ADMIN"
+      operationId: getMember
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [adherents]
+      summary: "Modifier un adhérent (US-019) — LIBRARIAN, ADMIN"
+      operationId: updateMember
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MemberUpdateRequest' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberDetail' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /members/{memberNumber}/renewal:
+    post:
+      tags: [adherents]
+      summary: "Renouveler l'adhésion (US-020, RG-15) — LIBRARIAN, ADMIN"
+      operationId: renewMember
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /members/{memberNumber}/suspension:
+    post:
+      tags: [adherents]
+      summary: "Suspendre un adhérent (US-021, RG-17) — LIBRARIAN, ADMIN"
+      operationId: suspendMember
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SuspendMemberRequest' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberDetail' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /members/{memberNumber}/reactivation:
+    post:
+      tags: [adherents]
+      summary: "Réactiver un adhérent suspendu (US-021) — LIBRARIAN, ADMIN"
+      operationId: reactivateMember
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /members/{memberNumber}/archive-check:
+    get:
+      tags: [adherents]
+      summary: "Vérifier l'archivabilité (US-022, RG-18) — LIBRARIAN, ADMIN"
+      operationId: checkMemberArchive
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ArchiveCheck' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /members/{memberNumber}/archive:
+    post:
+      tags: [adherents]
+      summary: "Archiver et anonymiser un adhérent (US-022, RG-18) — LIBRARIAN, ADMIN"
+      operationId: archiveMember
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberDetail' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /members/{memberNumber}/loans:
+    get:
+      tags: [circulation]
+      summary: "Emprunts en cours d'un adhérent (ECR-18) — LIBRARIAN, ADMIN"
+      operationId: memberLoans
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/MemberLoan' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /members/{memberNumber}/reservations:
+    get:
+      tags: [circulation]
+      summary: "Réservations actives d'un adhérent (ECR-18) — LIBRARIAN, ADMIN"
+      operationId: memberReservations
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/MemberReservation' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /members/{memberNumber}/fines:
+    get:
+      tags: [circulation]
+      summary: "Pénalités impayées d'un adhérent (ECR-18, ECR-34) — LIBRARIAN, ADMIN"
+      operationId: memberFines
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberFines' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /members/{memberNumber}/history:
+    get:
+      tags: [circulation]
+      summary: "Emprunts rendus depuis 4 mois (RG-19) — LIBRARIAN, ADMIN"
+      operationId: memberHistory
+      parameters:
+        - $ref: '#/components/parameters/MemberNumber'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HistoryLoanPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /me/member:
+    get:
+      tags: [adherents]
+      summary: "Identité de l'adhérent connecté (US-023) — MEMBER"
+      operationId: getMyMember
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MyMember' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /me/contact:
+    put:
+      tags: [adherents]
+      summary: "Modifier mes coordonnées (US-024) — MEMBER"
+      operationId: updateMyContact
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ContactRequest' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MyMember' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/loans:
+    get:
+      tags: [circulation]
+      summary: "Mes emprunts en cours (US-023) — MEMBER"
+      operationId: myLoans
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/MemberLoan' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /me/loans/{id}/renewal:
+    post:
+      tags: [circulation]
+      summary: "Prolonger mon emprunt (US-027) — MEMBER"
+      operationId: renewMyLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de l'emprunt"
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberLoan' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/reservations:
+    get:
+      tags: [circulation]
+      summary: "Mes réservations actives (US-023) — MEMBER"
+      operationId: myReservations
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/MemberReservation' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [circulation]
+      summary: "Réserver un livre (US-032) — MEMBER"
+      operationId: reserveForMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MyReservationRequest' }
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationCreated' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/reservations/{id}/cancellation:
+    post:
+      tags: [circulation]
+      summary: "Annuler ma réservation (US-033) — MEMBER"
+      operationId: cancelMyReservation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de la réservation"
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationCancelled' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /me/fines:
+    get:
+      tags: [circulation]
+      summary: "Mes pénalités impayées (US-023) — MEMBER"
+      operationId: myFines
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberFines' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /me/history:
+    get:
+      tags: [circulation]
+      summary: "Mon historique sur 4 mois (AC-023-2) — MEMBER"
+      operationId: myHistory
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HistoryLoanPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /me/books/{bookId}/reservation:
+    get:
+      tags: [circulation]
+      summary: "Ma situation de réservation sur une notice (ECR-09, AC-034-3) — MEMBER"
+      operationId: myBookReservation
+      parameters:
+        - name: bookId
+          in: path
+          required: true
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MyBookReservation' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /loans:
+    post:
+      tags: [circulation]
+      summary: "Enregistrer un emprunt (US-025) — LIBRARIAN, ADMIN"
+      operationId: borrowCopy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoanRequest' }
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoanResult' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /returns:
+    post:
+      tags: [circulation]
+      summary: "Enregistrer un retour (US-026, US-037) — LIBRARIAN, ADMIN"
+      operationId: returnCopy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ReturnRequest' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReturnResult' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /loans/{id}/renewal:
+    post:
+      tags: [circulation]
+      summary: "Prolonger un emprunt au guichet (AC-027-7) — LIBRARIAN, ADMIN"
+      operationId: renewLoan
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de l'emprunt"
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MemberLoan' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /loans/overdue:
+    get:
+      tags: [circulation]
+      summary: "Emprunts en retard (US-028) — LIBRARIAN, ADMIN"
+      operationId: overdueLoans
+      parameters:
+        - name: minDays
+          in: query
+          description: "Retard minimal en jours"
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: sort
+          in: query
+          schema: { type: string, enum: [overdueDays, dueDate, memberName], default: overdueDays }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OverdueLoanPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /loans/{id}/loss-preview:
+    get:
+      tags: [circulation]
+      summary: "Prévisualiser les pénalités de perte (ECR-27) — LIBRARIAN, ADMIN"
+      operationId: previewLoss
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de l'emprunt"
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LossAmounts' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /loans/{id}/loss:
+    post:
+      tags: [circulation]
+      summary: "Déclarer un exemplaire perdu (US-029, RG-28) — LIBRARIAN, ADMIN"
+      operationId: declareLoss
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de l'emprunt"
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LossAmounts' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /copies/{copyNumber}/found:
+    post:
+      tags: [circulation]
+      summary: "Remettre en circulation un exemplaire retrouvé (US-030) — LIBRARIAN, ADMIN"
+      operationId: markCopyFound
+      parameters:
+        - $ref: '#/components/parameters/CopyNumber'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CopyRelease' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /copies/{copyNumber}/loans:
+    get:
+      tags: [circulation]
+      summary: "Historique de circulation d'un exemplaire (US-031) — LIBRARIAN, ADMIN"
+      operationId: copyLoanHistory
+      parameters:
+        - $ref: '#/components/parameters/CopyNumber'
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CopyLoanHistoryPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reservations/preview:
+    get:
+      tags: [circulation]
+      summary: "Prévisualiser une réservation pour un adhérent (ECR-31) — LIBRARIAN, ADMIN"
+      operationId: previewReservation
+      parameters:
+        - name: bookId
+          in: query
+          required: true
+          schema: { type: integer, format: int64 }
+        - name: memberNumber
+          in: query
+          required: true
+          schema: { type: string, pattern: '^A[0-9]{6}$' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationPreview' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reservations:
+    post:
+      tags: [circulation]
+      summary: "Réserver pour un adhérent (AC-032-8) — LIBRARIAN, ADMIN"
+      operationId: reserveForMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StaffReservationRequest' }
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationCreated' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /reservations/{id}/cancellation:
+    post:
+      tags: [circulation]
+      summary: "Annuler une réservation (US-033, RG-34) — LIBRARIAN, ADMIN"
+      operationId: cancelReservation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de la réservation"
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReservationCancelled' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /books/{id}/reservations:
+    get:
+      tags: [circulation]
+      summary: "File d'attente d'une notice (US-034) — LIBRARIAN, ADMIN"
+      operationId: bookQueue
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de la notice"
+          schema: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/QueueEntry' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /reservations/ready:
+    get:
+      tags: [circulation]
+      summary: "Réservations prêtes (US-035) — LIBRARIAN, ADMIN"
+      operationId: readyReservations
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadyReservationPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /reservations/released:
+    get:
+      tags: [circulation]
+      summary: "Exemplaires libérés à ranger (US-035, Q-26) — LIBRARIAN, ADMIN"
+      operationId: releasedCopies
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReleasedCopyPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /payments:
+    post:
+      tags: [circulation]
+      summary: "Encaisser des pénalités (US-038, RG-38) — LIBRARIAN, ADMIN"
+      operationId: collectFines
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentRequest' }
+      responses:
+        '201':
+          description: Créé
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentResult' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /fines/{id}/waiver:
+    post:
+      tags: [circulation]
+      summary: "Accorder une remise gracieuse (US-039, RG-39) — ADMIN"
+      operationId: waiveFine
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: "Identifiant de la pénalité"
+          schema: { type: integer, format: int64, minimum: 1 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/WaiverRequest' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WaiverResult' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+
+  /fines/debtors:
+    get:
+      tags: [circulation]
+      summary: "Adhérents ayant des pénalités impayées (US-040) — LIBRARIAN, ADMIN"
+      operationId: debtors
+      parameters:
+        - name: sort
+          in: query
+          schema: { type: string, enum: [total, count, name], default: total }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DebtorList' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /dashboard:
+    get:
+      tags: [pilotage]
+      summary: "Indicateurs du jour (US-041) — LIBRARIAN, ADMIN"
+      operationId: dashboard
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dashboard' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /statistics:
+    get:
+      tags: [pilotage]
+      summary: "Statistiques d'un mois (US-042, RG-41) — ADMIN"
+      operationId: monthlyStatistics
+      parameters:
+        - name: month
+          in: query
+          required: true
+          description: "Mois AAAA-MM, au plus le mois en cours"
+          schema: { type: string, pattern: '^[0-9]{4}-[0-9]{2}$' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MonthlyStatistics' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /statistics/export:
+    get:
+      tags: [pilotage]
+      summary: "Exporter les statistiques en tableur (AC-042-3) — ADMIN"
+      operationId: exportStatistics
+      parameters:
+        - name: month
+          in: query
+          required: true
+          schema: { type: string, pattern: '^[0-9]{4}-[0-9]{2}$' }
+      responses:
+        '200':
+          description: Fichier CSV (UTF-8 avec BOM, séparateur « ; »), sans donnée nominative
+          content:
+            text/csv:
+              schema: { type: string }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /settings:
+    get:
+      tags: [pilotage]
+      summary: "Paramètres des règles de prêt (US-043) — ADMIN"
+      operationId: listSettings
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { type: array, items: { $ref: '#/components/schemas/SettingView' } }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /settings/{code}:
+    put:
+      tags: [pilotage]
+      summary: "Modifier un paramètre (US-043, RG-40) — ADMIN"
+      operationId: updateSetting
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/SettingCode' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingUpdateRequest' }
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SettingView' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+
+  /audit-entries:
+    get:
+      tags: [pilotage]
+      summary: "Journal d'audit, lecture seule (US-044) — ADMIN"
+      operationId: auditEntries
+      parameters:
+        - name: object
+          in: query
+          description: "Identifiant fonctionnel (numéro d'adhérent, d'exemplaire…)"
+          schema: { type: string }
+        - name: actor
+          in: query
+          description: "Libellé d'auteur (contient)"
+          schema: { type: string }
+        - name: action
+          in: query
+          schema: { type: string, enum: [CREATE, UPDATE, STATE_CHANGE, DELETE, LOGIN_SUCCESS, LOGIN_FAILURE, LOGOUT] }
+        - name: from
+          in: query
+          description: "Défaut : 6 jours avant « to »"
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: "Défaut : aujourd'hui"
+          schema: { type: string, format: date }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Size'
+      responses:
+        '200':
+          description: Succès
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEntryPage' }
+        '400': { $ref: '#/components/responses/ValidationFailed' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: BIBSESSION
+      description: |
+        Session serveur (ADR-004). Toute requête non sûre (POST, PUT, PATCH, DELETE) doit aussi
+        envoyer l'en-tête X-XSRF-TOKEN avec la valeur du cookie XSRF-TOKEN.
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      description: Numéro de page, à partir de 0
+      schema: { type: integer, minimum: 0, default: 0 }
+    Size:
+      name: size
+      in: query
+      description: Taille de page
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    Sort:
+      name: sort
+      in: query
+      description: "Tri `champ,asc|desc` ; champs autorisés propres à chaque ressource (liste blanche)"
+      schema: { type: string, pattern: '^[a-zA-Z]+,(asc|desc)$' }
+
+    AccountId:
+      name: id
+      in: path
+      required: true
+      description: Identifiant technique du compte
+      schema: { type: integer, format: int64, minimum: 1 }
+    BookId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    CategoryId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, format: int64, minimum: 1 }
+    CopyNumber:
+      name: copyNumber
+      in: path
+      required: true
+      description: Numéro d'exemplaire (RG-09)
+      schema: { type: string, pattern: '^[0-9]{8}$' }
+    MemberNumber:
+      name: memberNumber
+      in: path
+      required: true
+      description: Numéro d'adhérent (RG-13)
+      schema: { type: string, pattern: '^A[0-9]{6}$' }
+    Query:
+      name: q
+      in: query
+      description: "Mot-clé : titre, sous-titre, auteur ou ISBN (RG-11)"
+      schema: { type: string, minLength: 2, maxLength: 100 }
+    CategoryFilter:
+      name: categoryId
+      in: query
+      schema: { type: integer, format: int64 }
+
+  responses:
+    ValidationFailed:
+      description: Données invalides (VALIDATION_FAILED)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Unauthenticated:
+      description: Non authentifié ou session expirée (AUTHENTICATION_REQUIRED)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Forbidden:
+      description: Droits insuffisants (ACCESS_DENIED) ou mot de passe temporaire à changer (PASSWORD_CHANGE_REQUIRED)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    NotFound:
+      description: Ressource introuvable (<RESSOURCE>_NOT_FOUND)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Conflict:
+      description: Conflit avec l'état courant (règle de gestion, doublon, modification concurrente)
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    UnprocessableEntity:
+      description: Donnée refusée par une règle de gestion
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+
+  schemas:
+    ProblemDetail:
+      type: object
+      description: Erreur au format RFC 9457 (ex-RFC 7807), étendue par ADR-003
+      required: [status, code]
+      properties:
+        type: { type: string, format: uri, default: about:blank }
+        title: { type: string, examples: [Conflict] }
+        status: { type: integer, examples: [409] }
+        detail: { type: string, description: Message lisible en français }
+        instance: { type: string }
+        code: { $ref: '#/components/schemas/ErrorCode' }
+        reasons:
+          type: array
+          description: Motifs multiples (éligibilité RG-23, blocage d'archivage RG-18)
+          items: { type: string }
+        fieldErrors:
+          type: array
+          items: { $ref: '#/components/schemas/FieldError' }
+      additionalProperties: true
+
+    FieldError:
+      type: object
+      required: [field, code, message]
+      properties:
+        field: { type: string, examples: [title] }
+        code: { type: string, examples: [NotBlank] }
+        message: { type: string }
+
+    PageMeta:
+      type: object
+      required: [page, size, totalElements, totalPages]
+      properties:
+        page: { type: integer, minimum: 0 }
+        size: { type: integer, minimum: 1, maximum: 100 }
+        totalElements: { type: integer, format: int64, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+
+    ErrorCode:
+      type: string
+      description: Codes métier stables (ARCH-socle §4)
+      enum:
+        - VALIDATION_FAILED
+        - AUTHENTICATION_REQUIRED
+        - ACCESS_DENIED
+        - CSRF_TOKEN_INVALID
+        - CONCURRENT_MODIFICATION
+        - ROUTE_NOT_FOUND
+        - REQUEST_NOT_SUPPORTED
+        - INTERNAL_ERROR
+        - ACCOUNT_NOT_FOUND
+        - MEMBER_NOT_FOUND
+        - BOOK_NOT_FOUND
+        - AUTHOR_NOT_FOUND
+        - CATEGORY_NOT_FOUND
+        - COPY_NOT_FOUND
+        - LOAN_NOT_FOUND
+        - RESERVATION_NOT_FOUND
+        - FINE_NOT_FOUND
+        - INVALID_CREDENTIALS
+        - ACCOUNT_LOCKED
+        - ACCOUNT_DISABLED
+        - PASSWORD_POLICY_VIOLATION
+        - PASSWORD_RECENTLY_USED
+        - CURRENT_PASSWORD_INCORRECT
+        - PASSWORD_CHANGE_REQUIRED
+        - ROLE_NOT_ALLOWED
+        - SELF_DEACTIVATION_FORBIDDEN
+        - LAST_ADMIN_REQUIRED
+        - EMAIL_ALREADY_USED
+        - ISBN_INVALID
+        - ISBN_ALREADY_EXISTS
+        - ISBN_LOOKUP_NOT_FOUND
+        - ISBN_LOOKUP_UNAVAILABLE
+        - BOOK_HAS_COPIES
+        - COPY_IN_CIRCULATION
+        - COPY_WITHDRAWN
+        - CATEGORY_ALREADY_EXISTS
+        - CATEGORY_IN_USE
+        - DUPLICATE_MEMBER_SUSPECTED
+        - GUARDIAN_REQUIRED
+        - RENEWAL_TOO_EARLY
+        - MEMBER_SUSPENDED
+        - MEMBER_ARCHIVED
+        - ARCHIVE_BLOCKED
+        - MEMBER_NOT_ELIGIBLE
+        - COPY_NOT_AVAILABLE
+        - COPY_RESERVED_FOR_ANOTHER_MEMBER
+        - NO_ACTIVE_LOAN_FOR_COPY
+        - RENEWAL_LIMIT_REACHED
+        - RENEWAL_BLOCKED_BY_RESERVATION
+        - LOAN_OVERDUE
+        - LOAN_NOT_ACTIVE
+        - COPY_NOT_LOST
+        - COPY_AVAILABLE_ON_SHELF
+        - NO_COPY_IN_CIRCULATION
+        - RESERVATION_LIMIT_REACHED
+        - RESERVATION_ALREADY_EXISTS
+        - BOOK_ALREADY_BORROWED
+        - RESERVATION_CLOSED
+        - PARTIAL_PAYMENT_NOT_ALLOWED
+        - PAYMENT_AMOUNT_MISMATCH
+        - FINE_ALREADY_SETTLED
+        - SETTING_OUT_OF_RANGE
+        - MONTH_IN_FUTURE
+
+    EligibilityReason:
+      type: string
+      description: Motifs d'inéligibilité (RG-23), renvoyés dans ProblemDetail.reasons
+      enum:
+        - MEMBERSHIP_EXPIRED
+        - MEMBER_SUSPENDED
+        - MEMBER_ARCHIVED
+        - OVERDUE_LOAN
+        - UNPAID_FINES_ABOVE_THRESHOLD
+        - LOAN_LIMIT_REACHED
+
+    ArchiveBlockingReason:
+      type: string
+      description: Motifs de blocage de l'archivage (RG-18)
+      enum: [ACTIVE_LOANS, ACTIVE_RESERVATIONS, UNPAID_FINES]
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 1, maxLength: 128 }
+
+    SessionUserResponse:
+      type: object
+      required: [accountId, email, role, lastName, firstName, passwordTemporary]
+      properties:
+        accountId: { type: integer, format: int64 }
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/Role' }
+        lastName: { type: string }
+        firstName: { type: string }
+        passwordTemporary: { type: boolean, description: "Si vrai, seul le changement de mot de passe est autorisé (RG-05)" }
+        memberNumber: { type: [string, 'null'], pattern: '^A[0-9]{6}$', description: Renseigné uniquement pour le rôle MEMBER }
+
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string, minLength: 1, maxLength: 128 }
+        newPassword: { type: string, minLength: 1, maxLength: 128, description: Politique RG-01 vérifiée par le serveur }
+
+    StaffAccountResponse:
+      type: object
+      required: [id, lastName, firstName, email, role, status, me, version]
+      properties:
+        id: { type: integer, format: int64 }
+        lastName: { type: string }
+        firstName: { type: string }
+        email: { type: string, format: email }
+        role: { $ref: '#/components/schemas/Role' }
+        status: { $ref: '#/components/schemas/AccountStatus' }
+        me: { type: boolean, description: Compte de l'administrateur connecté }
+        version: { type: integer }
+
+    StaffAccountPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content:
+              type: array
+              items: { $ref: '#/components/schemas/StaffAccountResponse' }
+
+    CreateStaffAccountRequest:
+      type: object
+      required: [lastName, firstName, email, role, initialPassword]
+      properties:
+        lastName: { type: string, minLength: 1, maxLength: 100 }
+        firstName: { type: string, minLength: 1, maxLength: 100 }
+        email: { type: string, format: email, maxLength: 254 }
+        role: { $ref: '#/components/schemas/Role', description: LIBRARIAN ou ADMIN ; MEMBER refusé (ROLE_NOT_ALLOWED) }
+        initialPassword: { type: string, minLength: 1, maxLength: 128 }
+
+    PasswordResetRequest:
+      type: object
+      required: [newPassword]
+      properties:
+        newPassword: { type: string, minLength: 1, maxLength: 128 }
+
+    AuthorResponse:
+      type: object
+      required: [id, lastName]
+      properties:
+        id: { type: integer, format: int64 }
+        lastName: { type: string }
+        firstName: { type: [string, 'null'] }
+
+    AuthorRequest:
+      type: object
+      required: [lastName]
+      properties:
+        lastName: { type: string, minLength: 1, maxLength: 100 }
+        firstName: { type: [string, 'null'], maxLength: 100 }
+
+    CategoryOption:
+      type: object
+      required: [id, label]
+      properties:
+        id: { type: integer, format: int64 }
+        label: { type: string }
+
+    LanguageOption:
+      type: object
+      required: [code, label]
+      properties:
+        code: { type: string, pattern: '^[a-z]{3}$' }
+        label: { type: string }
+
+    BookSearchItem:
+      type: object
+      required: [id, title, authors, categories, availableCount, totalCount]
+      properties:
+        id: { type: integer, format: int64 }
+        title: { type: string }
+        subtitle: { type: [string, 'null'] }
+        authors: { type: array, items: { $ref: '#/components/schemas/AuthorResponse' } }
+        publicationYear: { type: [integer, 'null'] }
+        categories: { type: array, items: { $ref: '#/components/schemas/CategoryOption' } }
+        availableCount: { type: integer, description: Exemplaires AVAILABLE }
+        totalCount: { type: integer, description: Exemplaires hors WITHDRAWN et LOST }
+
+    BookSearchPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/BookSearchItem' } }
+
+    PublicCopy:
+      type: object
+      required: [shelfMark, status]
+      properties:
+        shelfMark: { type: string }
+        status: { $ref: '#/components/schemas/CopyStatus' }
+        dueDate: { type: [string, 'null'], format: date, description: Renseignée si ON_LOAN }
+
+    BookPublicDetail:
+      type: object
+      required: [id, title, authors, categories, language, copies, availableCount, totalCount]
+      properties:
+        id: { type: integer, format: int64 }
+        isbn: { type: [string, 'null'], pattern: '^97[89][0-9]{10}$' }
+        title: { type: string }
+        subtitle: { type: [string, 'null'] }
+        authors: { type: array, items: { $ref: '#/components/schemas/AuthorResponse' } }
+        categories: { type: array, items: { $ref: '#/components/schemas/CategoryOption' } }
+        publisher: { type: [string, 'null'] }
+        publicationYear: { type: [integer, 'null'] }
+        language: { $ref: '#/components/schemas/LanguageOption' }
+        pageCount: { type: [integer, 'null'] }
+        summary: { type: [string, 'null'] }
+        copies: { type: array, items: { $ref: '#/components/schemas/PublicCopy' } }
+        availableCount: { type: integer }
+        totalCount: { type: integer }
+
+    BookAdminItem:
+      type: object
+      required: [id, title, authors, availableCount, totalCount, copyCount, withdrawn]
+      properties:
+        id: { type: integer, format: int64 }
+        title: { type: string }
+        authors: { type: array, items: { $ref: '#/components/schemas/AuthorResponse' } }
+        isbn: { type: [string, 'null'] }
+        publicationYear: { type: [integer, 'null'] }
+        availableCount: { type: integer }
+        totalCount: { type: integer }
+        copyCount: { type: integer, description: "Tous les exemplaires, y compris retirés" }
+        withdrawn: { type: boolean, description: Au moins un exemplaire et tous retirés }
+
+    BookAdminPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/BookAdminItem' } }
+
+    CopyResponse:
+      type: object
+      required: [id, copyNumber, shelfMark, physicalCondition, acquisitionDate, status, version]
+      properties:
+        id: { type: integer, format: int64 }
+        copyNumber: { type: string, pattern: '^[0-9]{8}$' }
+        shelfMark: { type: string }
+        physicalCondition: { $ref: '#/components/schemas/PhysicalCondition' }
+        acquisitionDate: { type: string, format: date }
+        status: { $ref: '#/components/schemas/CopyStatus' }
+        withdrawalReason: { oneOf: [{ $ref: '#/components/schemas/WithdrawalReason' }, { type: 'null' }] }
+        dueDate: { type: [string, 'null'], format: date }
+        version: { type: integer }
+
+    BookAdminDetail:
+      type: object
+      required: [id, title, authors, categories, language, copies, availableCount, totalCount, version]
+      properties:
+        id: { type: integer, format: int64 }
+        isbn: { type: [string, 'null'] }
+        title: { type: string }
+        subtitle: { type: [string, 'null'] }
+        authors: { type: array, items: { $ref: '#/components/schemas/AuthorResponse' } }
+        categories: { type: array, items: { $ref: '#/components/schemas/CategoryOption' } }
+        publisher: { type: [string, 'null'] }
+        publicationYear: { type: [integer, 'null'] }
+        language: { $ref: '#/components/schemas/LanguageOption' }
+        pageCount: { type: [integer, 'null'] }
+        summary: { type: [string, 'null'] }
+        copies: { type: array, items: { $ref: '#/components/schemas/CopyResponse' } }
+        availableCount: { type: integer }
+        totalCount: { type: integer }
+        version: { type: integer }
+
+    BookRequest:
+      type: object
+      required: [title, authorIds, categoryIds, languageCode]
+      properties:
+        isbn: { type: [string, 'null'], maxLength: 20, description: "ISBN-10 ou ISBN-13, tirets et espaces tolérés (RG-07)" }
+        title: { type: string, minLength: 1, maxLength: 255 }
+        subtitle: { type: [string, 'null'], maxLength: 255 }
+        authorIds: { type: array, minItems: 1, items: { type: integer, format: int64 }, description: Ordre d'affichage }
+        categoryIds: { type: array, minItems: 1, uniqueItems: true, items: { type: integer, format: int64 } }
+        publisher: { type: [string, 'null'], maxLength: 150 }
+        publicationYear: { type: [integer, 'null'], minimum: 1450, description: "≤ année en cours (RG-08)" }
+        languageCode: { type: string, pattern: '^[a-z]{3}$' }
+        pageCount: { type: [integer, 'null'], minimum: 1 }
+        summary: { type: [string, 'null'], maxLength: 4000 }
+        version: { type: [integer, 'null'], description: Obligatoire en modification }
+
+    AddCopiesRequest:
+      type: object
+      required: [quantity, shelfMark, physicalCondition, acquisitionDate]
+      properties:
+        quantity: { type: integer, minimum: 1, maximum: 20 }
+        shelfMark: { type: string, minLength: 1, maxLength: 30 }
+        physicalCondition: { $ref: '#/components/schemas/PhysicalCondition' }
+        acquisitionDate: { type: string, format: date, description: "≤ date du jour" }
+
+    UpdateCopyRequest:
+      type: object
+      required: [shelfMark, physicalCondition, version]
+      properties:
+        shelfMark: { type: string, minLength: 1, maxLength: 30 }
+        physicalCondition: { $ref: '#/components/schemas/PhysicalCondition' }
+        version: { type: integer }
+
+    WithdrawCopyRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { $ref: '#/components/schemas/WithdrawalReason' }
+
+    CategoryResponse:
+      type: object
+      required: [id, label, bookCount, version]
+      properties:
+        id: { type: integer, format: int64 }
+        label: { type: string }
+        bookCount: { type: integer }
+        version: { type: integer }
+
+    CategoryPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/CategoryResponse' } }
+
+    CategoryRequest:
+      type: object
+      required: [label]
+      properties:
+        label: { type: string, minLength: 2, maxLength: 50 }
+        version: { type: [integer, 'null'], description: Obligatoire en modification }
+
+    SettingCode:
+      type: string
+      enum: [MEMBERSHIP_DURATION_MONTHS, MEMBERSHIP_EARLY_RENEWAL_DAYS, LOAN_DURATION_DAYS, LOAN_MAX_ACTIVE, LOAN_MAX_RENEWALS, LOAN_RENEWAL_DAYS, RESERVATION_MAX_ACTIVE, RESERVATION_PICKUP_DAYS, FINE_BLOCKING_THRESHOLD, FINE_DAILY_RATE, FINE_LATE_CAP, FINE_LOST_ITEM_AMOUNT]
+
+    GuardianRequest:
+      type: object
+      required: [lastName, firstName, phone]
+      properties:
+        lastName: { type: string }
+        firstName: { type: string }
+        phone: { type: string }
+
+    MemberCreateRequest:
+      type: object
+      required: [lastName, firstName, birthDate, email, street, postalCode, city, password]
+      properties:
+        lastName: { type: string, maxLength: 100 }
+        firstName: { type: string, maxLength: 100 }
+        birthDate: { type: string, format: date }
+        guardian: { $ref: '#/components/schemas/GuardianRequest' }
+        email: { type: string, format: email, maxLength: 254 }
+        phone: { type: string, description: 'Q-24 : 0 + 9 chiffres, ou + et 8 à 15 chiffres ; espaces tolérés' }
+        street: { type: string, maxLength: 255 }
+        postalCode: { type: string, pattern: '^[0-9]{5}$' }
+        city: { type: string, maxLength: 100 }
+        password: { type: string, description: 'Mot de passe initial (RG-01), temporaire (RG-05)' }
+        confirmDuplicate: { type: boolean, default: false, description: 'AC-016-7' }
+
+    MemberUpdateRequest:
+      type: object
+      required: [lastName, firstName, birthDate, email, street, postalCode, city, version]
+      properties:
+        lastName: { type: string }
+        firstName: { type: string }
+        birthDate: { type: string, format: date }
+        guardian: { $ref: '#/components/schemas/GuardianRequest' }
+        email: { type: string }
+        phone: { type: string }
+        street: { type: string }
+        postalCode: { type: string }
+        city: { type: string }
+        version: { type: integer }
+
+    SuspendMemberRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 255 }
+
+    ContactRequest:
+      type: object
+      required: [street, postalCode, city, version]
+      properties:
+        phone: { type: string }
+        street: { type: string }
+        postalCode: { type: string, pattern: '^[0-9]{5}$' }
+        city: { type: string }
+        version: { type: integer }
+
+    MemberSummary:
+      type: object
+      required: [memberNumber, status, expiryDate]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: [string, 'null'] }
+        firstName: { type: [string, 'null'] }
+        birthDate: { type: [string, 'null'], format: date }
+        status: { $ref: '#/components/schemas/MemberStatus' }
+        expiryDate: { type: string, format: date }
+
+    Eligibility:
+      type: object
+      required: [eligible, reasons, activeLoans, loanLimit, remainingLoans, unpaidTotal, fineThreshold]
+      properties:
+        eligible: { type: boolean }
+        reasons: { type: array, items: { $ref: '#/components/schemas/EligibilityReason' } }
+        activeLoans: { type: integer }
+        loanLimit: { type: integer }
+        remainingLoans: { type: integer }
+        unpaidTotal: { type: number, description: 'Montant en euros, 2 décimales' }
+        fineThreshold: { type: number, description: 'Montant en euros, 2 décimales' }
+
+    RenewalInfo:
+      type: object
+      required: [allowed]
+      properties:
+        allowed: { type: boolean }
+        newExpiryDate: { type: [string, 'null'], format: date }
+        renewableFrom: { type: [string, 'null'], format: date }
+        blockedBy: { type: [string, 'null'], enum: [RENEWAL_TOO_EARLY, MEMBER_SUSPENDED, MEMBER_ARCHIVED, null] }
+
+    Guardian:
+      type: object
+      required: [lastName, firstName, phone]
+      properties:
+        lastName: { type: string }
+        firstName: { type: string }
+        phone: { type: string }
+
+    MemberDetail:
+      type: object
+      required: [memberNumber, postalCode, registrationDate, expiryDate, status, version, eligibility, renewal, expiresSoon, activeReservations]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: [string, 'null'] }
+        firstName: { type: [string, 'null'] }
+        birthDate: { type: [string, 'null'], format: date }
+        email: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        street: { type: [string, 'null'] }
+        postalCode: { type: string }
+        city: { type: [string, 'null'] }
+        guardian: { $ref: '#/components/schemas/Guardian' }
+        registrationDate: { type: string, format: date }
+        expiryDate: { type: string, format: date }
+        status: { $ref: '#/components/schemas/MemberStatus' }
+        suspensionReason: { type: [string, 'null'] }
+        accountId: { type: [integer, 'null'], format: int64 }
+        accountStatus: { $ref: '#/components/schemas/AccountStatus' }
+        version: { type: integer }
+        eligibility: { $ref: '#/components/schemas/Eligibility' }
+        renewal: { $ref: '#/components/schemas/RenewalInfo' }
+        expiresSoon: { type: boolean }
+        activeReservations: { type: integer }
+
+    ArchiveCheck:
+      type: object
+      required: [archivable, reasons, activeLoans, activeReservations, unpaidTotal]
+      properties:
+        archivable: { type: boolean }
+        reasons: { type: array, items: { $ref: '#/components/schemas/ArchiveBlockingReason' } }
+        activeLoans: { type: integer }
+        activeReservations: { type: integer }
+        unpaidTotal: { type: number, description: 'Montant en euros, 2 décimales' }
+
+    MemberToArchive:
+      type: object
+      required: [memberNumber, expiryDate, archivable, reasons]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: string }
+        firstName: { type: string }
+        expiryDate: { type: string, format: date }
+        archivable: { type: boolean }
+        reasons: { type: array, items: { $ref: '#/components/schemas/ArchiveBlockingReason' } }
+        activeLoans: { type: integer }
+        activeReservations: { type: integer }
+        unpaidTotal: { type: number, description: 'Montant en euros, 2 décimales' }
+
+    MyMember:
+      type: object
+      required: [memberNumber, status, expiryDate, version]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: string }
+        firstName: { type: string }
+        birthDate: { type: string, format: date }
+        email: { type: string }
+        phone: { type: [string, 'null'] }
+        street: { type: string }
+        postalCode: { type: string }
+        city: { type: string }
+        status: { $ref: '#/components/schemas/MemberStatus' }
+        expiryDate: { type: string, format: date }
+        version: { type: integer }
+
+    MemberBrief:
+      type: object
+      required: [memberNumber]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: [string, 'null'] }
+        firstName: { type: [string, 'null'] }
+
+    MemberContactBrief:
+      type: object
+      required: [memberNumber]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: [string, 'null'] }
+        firstName: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+
+    Hold:
+      type: object
+      required: [memberNumber, pickupDeadline]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: [string, 'null'] }
+        firstName: { type: [string, 'null'] }
+        pickupDeadline: { type: string, format: date }
+
+    CopyRelease:
+      type: object
+      required: [copyNumber, shelfMark, destination]
+      properties:
+        copyNumber: { type: string }
+        shelfMark: { type: string }
+        destination: { type: string, enum: [SHELF, HOLD] }
+        hold: { $ref: '#/components/schemas/Hold' }
+
+    LoanRenewal:
+      type: object
+      required: [allowed, memberReasons, newDueDate]
+      properties:
+        allowed: { type: boolean }
+        blockedBy: { type: [string, 'null'], enum: [RENEWAL_LIMIT_REACHED, RENEWAL_BLOCKED_BY_RESERVATION, LOAN_OVERDUE, MEMBER_NOT_ELIGIBLE, null] }
+        memberReasons: { type: array, items: { $ref: '#/components/schemas/EligibilityReason' } }
+        newDueDate: { type: string, format: date }
+
+    MemberLoan:
+      type: object
+      required: [id, copyNumber, bookId, title, loanDate, dueDate, status, renewalCount, overdueDays, provisionalFine, renewal]
+      properties:
+        id: { type: integer, format: int64 }
+        copyNumber: { type: string }
+        bookId: { type: integer, format: int64 }
+        title: { type: string }
+        loanDate: { type: string, format: date }
+        dueDate: { type: string, format: date }
+        status: { $ref: '#/components/schemas/LoanStatus' }
+        renewalCount: { type: integer }
+        overdueDays: { type: integer }
+        provisionalFine: { type: number, description: 'Montant provisoire RG-36 (0 sans retard)' }
+        renewal: { $ref: '#/components/schemas/LoanRenewal' }
+
+    HistoryLoan:
+      type: object
+      required: [id, copyNumber, title, loanDate, dueDate, returnDate]
+      properties:
+        id: { type: integer, format: int64 }
+        copyNumber: { type: string }
+        title: { type: string }
+        loanDate: { type: string, format: date }
+        dueDate: { type: string, format: date }
+        returnDate: { type: string, format: date }
+
+    LoanRequest:
+      type: object
+      required: [memberNumber, copyNumber]
+      properties:
+        memberNumber: { type: string, pattern: '^A[0-9]{6}$' }
+        copyNumber: { type: string, pattern: '^[0-9]{8}$' }
+
+    LoanResult:
+      type: object
+      required: [loanId, copyNumber, title, dueDate, reservationFulfilled, eligibility]
+      properties:
+        loanId: { type: integer, format: int64 }
+        copyNumber: { type: string }
+        title: { type: string }
+        dueDate: { type: string, format: date }
+        reservationFulfilled: { type: boolean }
+        eligibility: { $ref: '#/components/schemas/Eligibility' }
+
+    ReturnRequest:
+      type: object
+      required: [copyNumber]
+      properties:
+        copyNumber: { type: string, pattern: '^[0-9]{8}$' }
+
+    ReturnResult:
+      type: object
+      required: [copyNumber, title, shelfMark, lateDays, destination]
+      properties:
+        copyNumber: { type: string }
+        title: { type: string }
+        shelfMark: { type: string }
+        member: { $ref: '#/components/schemas/MemberBrief' }
+        lateDays: { type: integer }
+        fine: { type: object, properties: { id: { type: integer, format: int64 }, amount: { type: number } } }
+        destination: { type: string, enum: [SHELF, HOLD] }
+        hold: { $ref: '#/components/schemas/Hold' }
+
+    OverdueLoan:
+      type: object
+      required: [loanId, copyNumber, title, dueDate, overdueDays, provisionalFine]
+      properties:
+        loanId: { type: integer, format: int64 }
+        copyNumber: { type: string }
+        title: { type: string }
+        member: { $ref: '#/components/schemas/MemberContactBrief' }
+        dueDate: { type: string, format: date }
+        overdueDays: { type: integer }
+        provisionalFine: { type: number, description: 'Montant en euros, 2 décimales' }
+
+    LossAmounts:
+      type: object
+      required: [lateDays, lateFine, lostItemFine, total]
+      properties:
+        lateDays: { type: integer }
+        lateFine: { type: number, description: 'Montant en euros, 2 décimales' }
+        lostItemFine: { type: number, description: 'Montant en euros, 2 décimales' }
+        total: { type: number, description: 'Montant en euros, 2 décimales' }
+
+    CopyLoanHistoryItem:
+      type: object
+      required: [loanDate, dueDate, status]
+      properties:
+        loanDate: { type: string, format: date }
+        dueDate: { type: string, format: date }
+        returnDate: { type: [string, 'null'], format: date }
+        status: { $ref: '#/components/schemas/LoanStatus' }
+        borrower: { $ref: '#/components/schemas/MemberBrief' }
+
+    MemberReservation:
+      type: object
+      required: [id, bookId, title, status, queueLength, reservedAt]
+      properties:
+        id: { type: integer, format: int64 }
+        bookId: { type: integer, format: int64 }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        position: { type: [integer, 'null'] }
+        queueLength: { type: integer }
+        reservedAt: { type: string, format: date-time }
+        pickupDeadline: { type: [string, 'null'], format: date }
+        copyNumber: { type: [string, 'null'] }
+
+    ReservationPreview:
+      type: object
+      required: [reservable, reasons, memberReasons, position, activeReservations, limit, pickupDays]
+      properties:
+        reservable: { type: boolean }
+        reasons: { type: array, items: { type: string, enum: [COPY_AVAILABLE_ON_SHELF, NO_COPY_IN_CIRCULATION, RESERVATION_ALREADY_EXISTS, BOOK_ALREADY_BORROWED, RESERVATION_LIMIT_REACHED, MEMBER_NOT_ELIGIBLE] } }
+        memberReasons: { type: array, items: { $ref: '#/components/schemas/EligibilityReason' } }
+        position: { type: integer }
+        activeReservations: { type: integer }
+        limit: { type: integer }
+        pickupDays: { type: integer }
+        member: { type: object, description: 'Personnel seulement', properties: { memberNumber: { type: string }, lastName: { type: string }, firstName: { type: string }, status: { $ref: '#/components/schemas/MemberStatus' } } }
+
+    CurrentReservation:
+      type: object
+      required: [id, status, queueLength]
+      properties:
+        id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        position: { type: [integer, 'null'] }
+        queueLength: { type: integer }
+        pickupDeadline: { type: [string, 'null'], format: date }
+
+    MyBookReservation:
+      type: object
+      required: [preview]
+      properties:
+        current: { $ref: '#/components/schemas/CurrentReservation' }
+        preview: { $ref: '#/components/schemas/ReservationPreview' }
+
+    MyReservationRequest:
+      type: object
+      required: [bookId]
+      properties:
+        bookId: { type: integer, format: int64 }
+
+    StaffReservationRequest:
+      type: object
+      required: [bookId, memberNumber]
+      properties:
+        bookId: { type: integer, format: int64 }
+        memberNumber: { type: string, pattern: '^A[0-9]{6}$' }
+
+    ReservationCreated:
+      type: object
+      required: [id, status, position, queueLength]
+      properties:
+        id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        position: { type: integer }
+        queueLength: { type: integer }
+
+    ReservationCancelled:
+      type: object
+      required: [id, status]
+      properties:
+        id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        release: { $ref: '#/components/schemas/CopyRelease' }
+
+    QueueEntry:
+      type: object
+      required: [id, status, reservedAt]
+      properties:
+        id: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/ReservationStatus' }
+        position: { type: [integer, 'null'] }
+        member: { $ref: '#/components/schemas/MemberBrief' }
+        reservedAt: { type: string, format: date-time }
+        pickupDeadline: { type: [string, 'null'], format: date }
+        copyNumber: { type: [string, 'null'] }
+
+    ReadyReservation:
+      type: object
+      required: [id, title, copyNumber, shelfMark, pickupDeadline, lastDay, notificationFailed]
+      properties:
+        id: { type: integer, format: int64 }
+        title: { type: string }
+        copyNumber: { type: string }
+        shelfMark: { type: string }
+        member: { $ref: '#/components/schemas/MemberContactBrief' }
+        pickupDeadline: { type: string, format: date }
+        lastDay: { type: boolean }
+        notificationFailed: { type: boolean }
+
+    ReleasedCopy:
+      type: object
+      required: [reservationId, title, copyNumber, shelfMark, closedOn, closedStatus, destination]
+      properties:
+        reservationId: { type: integer, format: int64 }
+        title: { type: string }
+        copyNumber: { type: string }
+        shelfMark: { type: string }
+        previousMember: { $ref: '#/components/schemas/MemberBrief' }
+        closedOn: { type: string, format: date }
+        closedStatus: { $ref: '#/components/schemas/ReservationStatus' }
+        destination: { type: string, enum: [SHELF, HOLD] }
+        hold: { $ref: '#/components/schemas/Hold' }
+
+    FineView:
+      type: object
+      required: [id, reason, createdOn, amount, version]
+      properties:
+        id: { type: integer, format: int64 }
+        reason: { $ref: '#/components/schemas/FineReason' }
+        lateDays: { type: [integer, 'null'] }
+        title: { type: [string, 'null'] }
+        copyNumber: { type: [string, 'null'] }
+        createdOn: { type: string, format: date }
+        amount: { type: number, description: 'Montant en euros, 2 décimales' }
+        version: { type: integer }
+
+    MemberFines:
+      type: object
+      required: [fines, total]
+      properties:
+        fines: { type: array, items: { $ref: '#/components/schemas/FineView' } }
+        total: { type: number, description: 'Montant en euros, 2 décimales' }
+
+    PaymentRequest:
+      type: object
+      required: [memberNumber, fineIds, method, amount]
+      properties:
+        memberNumber: { type: string, pattern: '^A[0-9]{6}$' }
+        fineIds: { type: array, minItems: 1, items: { type: integer, format: int64 } }
+        method: { $ref: '#/components/schemas/PaymentMethod' }
+        amount: { type: number, minimum: 0.01, description: 'Égal au total de la sélection (RG-38)' }
+
+    PaymentResult:
+      type: object
+      required: [paymentId, amount, method, paidFineIds, unpaidTotal, eligible]
+      properties:
+        paymentId: { type: integer, format: int64 }
+        amount: { type: number, description: 'Montant en euros, 2 décimales' }
+        method: { $ref: '#/components/schemas/PaymentMethod' }
+        paidFineIds: { type: array, items: { type: integer, format: int64 } }
+        unpaidTotal: { type: number, description: 'Montant en euros, 2 décimales' }
+        eligible: { type: boolean }
+
+    WaiverRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 255 }
+
+    WaiverResult:
+      type: object
+      required: [fineId, status, unpaidTotal, eligible]
+      properties:
+        fineId: { type: integer, format: int64 }
+        status: { $ref: '#/components/schemas/FineStatus' }
+        unpaidTotal: { type: number, description: 'Montant en euros, 2 décimales' }
+        eligible: { type: boolean }
+
+    Debtor:
+      type: object
+      required: [memberNumber, fineCount, total, blocked]
+      properties:
+        memberNumber: { type: string }
+        lastName: { type: [string, 'null'] }
+        firstName: { type: [string, 'null'] }
+        phone: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        fineCount: { type: integer }
+        total: { type: number, description: 'Montant en euros, 2 décimales' }
+        blocked: { type: boolean }
+
+    DebtorList:
+      type: object
+      required: [memberCount, totalAmount, threshold, page]
+      properties:
+        memberCount: { type: integer }
+        totalAmount: { type: number, description: 'Montant en euros, 2 décimales' }
+        threshold: { type: number, description: 'Montant en euros, 2 décimales' }
+        page: { $ref: '#/components/schemas/DebtorPage' }
+
+    Dashboard:
+      type: object
+      required: [date, loansToday, returnsToday, overdue, readyReservations, readyLastDay, toShelve, computedAt]
+      properties:
+        date: { type: string, format: date }
+        loansToday: { type: integer }
+        returnsToday: { type: integer }
+        overdue: { type: integer }
+        readyReservations: { type: integer }
+        readyLastDay: { type: integer }
+        toShelve: { type: integer }
+        computedAt: { type: string, format: date-time }
+
+    TopBook:
+      type: object
+      required: [bookId, title, authors, loans]
+      properties:
+        bookId: { type: integer, format: int64 }
+        title: { type: string }
+        authors: { type: string }
+        loans: { type: integer }
+
+    Rotation:
+      type: object
+      required: [category, loans, copies, rate]
+      properties:
+        category: { type: string }
+        loans: { type: integer }
+        copies: { type: integer }
+        rate: { type: number, description: 'Arrondi à 2 décimales (RG-41)' }
+
+    Collections:
+      type: object
+      required: [cash, card, check, waived]
+      properties:
+        cash: { type: number, description: 'Montant en euros, 2 décimales' }
+        card: { type: number, description: 'Montant en euros, 2 décimales' }
+        check: { type: number, description: 'Montant en euros, 2 décimales' }
+        waived: { type: number, description: 'Montant en euros, 2 décimales' }
+
+    MonthlyStatistics:
+      type: object
+      required: [month, loans, returns, renewals, reservations, newMembers, activeBorrowers, topBooks, rotation, collections]
+      properties:
+        month: { type: string }
+        loans: { type: integer }
+        returns: { type: integer }
+        renewals: { type: integer }
+        reservations: { type: integer }
+        newMembers: { type: integer }
+        activeBorrowers: { type: integer }
+        topBooks: { type: array, items: { $ref: '#/components/schemas/TopBook' } }
+        rotation: { type: array, items: { $ref: '#/components/schemas/Rotation' } }
+        collections: { $ref: '#/components/schemas/Collections' }
+
+    SettingView:
+      type: object
+      required: [code, group, valueType, unit, value, min, max, version]
+      properties:
+        code: { $ref: '#/components/schemas/SettingCode' }
+        group: { type: string, enum: [MEMBERSHIP, LOANS, RESERVATIONS, FINES] }
+        valueType: { type: string, enum: [INTEGER, MONEY] }
+        unit: { type: string, enum: [MONTHS, DAYS, COUNT, EUR] }
+        value: { type: number }
+        min: { type: number }
+        max: { type: number }
+        updatedAt: { type: [string, 'null'], format: date-time }
+        updatedBy: { type: [string, 'null'] }
+        version: { type: integer }
+
+    SettingUpdateRequest:
+      type: object
+      required: [value, version]
+      properties:
+        value: { type: number }
+        version: { type: integer }
+
+    AuditEntryView:
+      type: object
+      required: [id, occurredAt, actorLabel, action, objectType, objectRef]
+      properties:
+        id: { type: integer, format: int64 }
+        occurredAt: { type: string, format: date-time }
+        actorLabel: { type: string }
+        action: { type: string }
+        objectType: { type: string }
+        objectRef: { type: string }
+        details: { type: [object, 'null'], description: 'Valeurs avant/après, jamais de mot de passe (AC-044-2)' }
+
+    MemberSummaryPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/MemberSummary' } }
+
+    MemberToArchivePage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/MemberToArchive' } }
+
+    HistoryLoanPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/HistoryLoan' } }
+
+    OverdueLoanPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/OverdueLoan' } }
+
+    CopyLoanHistoryPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/CopyLoanHistoryItem' } }
+
+    ReadyReservationPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/ReadyReservation' } }
+
+    ReleasedCopyPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/ReleasedCopy' } }
+
+    DebtorPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/Debtor' } }
+
+    AuditEntryPage:
+      allOf:
+        - $ref: '#/components/schemas/PageMeta'
+        - type: object
+          required: [content]
+          properties:
+            content: { type: array, items: { $ref: '#/components/schemas/AuditEntryView' } }
+
+    Role:
+      type: string
+      enum: [MEMBER, LIBRARIAN, ADMIN]
+    AccountStatus:
+      type: string
+      enum: [ACTIVE, LOCKED, DISABLED]
+    MemberStatus:
+      type: string
+      enum: [ACTIVE, EXPIRED, SUSPENDED, ARCHIVED]
+    CopyStatus:
+      type: string
+      enum: [AVAILABLE, ON_LOAN, RESERVED, LOST, WITHDRAWN]
+    PhysicalCondition:
+      type: string
+      enum: [GOOD, WORN, DAMAGED]
+    WithdrawalReason:
+      type: string
+      enum: [DAMAGED, LOST, WEEDED, OTHER]
+    LoanStatus:
+      type: string
+      enum: [ACTIVE, OVERDUE, RETURNED, LOST]
+    ReservationStatus:
+      type: string
+      enum: [PENDING, READY, FULFILLED, EXPIRED, CANCELLED]
+    FineReason:
+      type: string
+      enum: [LATE_RETURN, LOST_ITEM]
+    FineStatus:
+      type: string
+      enum: [UNPAID, PAID, WAIVED]
+    PaymentMethod:
+      type: string
+      enum: [CASH, CARD, CHECK]

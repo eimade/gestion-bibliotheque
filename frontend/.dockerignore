@@ -1,0 +1,8 @@
+node_modules/
+dist/
+.angular/
+coverage/
+cypress/videos/
+cypress/screenshots/
+.idea/
+.vscode/
