@@ -1,5 +1,7 @@
 # Secrets
 .env
+demo/.env.demo
+demo/.seeded
 
 # Backend
 backend/build/

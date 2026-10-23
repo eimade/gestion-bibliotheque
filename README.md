@@ -5,6 +5,23 @@ réservations, pénalités, statistiques et journal d'audit. Interface entièrem
 
 **Stack** : Java 21 · Spring Boot 3.5 · MariaDB · Flyway · Angular 22 (standalone) · Tailwind CSS · Docker Compose
 
+## ▶ Tester l'application en ligne
+
+[![Ouvrir dans GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/eimade/gestion-bibliotheque?quickstart=1)
+
+Cliquez sur le bouton (compte GitHub requis, gratuit dans le quota mensuel de Codespaces) : GitHub démarre **votre propre
+copie** de l'application avec des données de démonstration, puis l'ouvre dans le navigateur. La première fois, comptez
+5 à 10 minutes de construction.
+
+| Profil | E-mail | Mot de passe |
+|---|---|---|
+| Administrateur | `admin@bibliotheque.example` | `DemoAdmin2026x` |
+| Bibliothécaire | `nadia.rami@bibliotheque.example` | `NadiaGuichet2026` |
+| Adhérent | `jean.martin@exemple.fr` | `LecteurDemo2026` |
+
+Ces comptes n'existent que dans les copies de démonstration. Parcours suggérés : [demo/README.md](demo/README.md).
+Pensez à arrêter le Codespace après usage (github.com/codespaces) pour préserver votre quota.
+
 ## Fonctionnalités
 
 | Profil | Ce qu'il peut faire |
